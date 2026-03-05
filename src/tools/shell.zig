@@ -214,7 +214,6 @@ test "shell reports interruption when cancel flag is set" {
 
     const result = try t.execute(std.testing.allocator, parsed.value.object);
     defer if (result.output.len > 0) std.testing.allocator.free(result.output);
-    defer if (result.error_msg) |e| std.testing.allocator.free(e);
 
     try std.testing.expect(!result.success);
     try std.testing.expect(result.error_msg != null);
