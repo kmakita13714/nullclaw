@@ -23,8 +23,6 @@ const subagent_mod = @import("subagent.zig");
 const subagent_runner = @import("subagent_runner.zig");
 const agent_routing = @import("agent_routing.zig");
 const provider_runtime = @import("providers/runtime_bundle.zig");
-const thread_stacks = @import("thread_stacks.zig");
-const control_plane = @import("control_plane.zig");
 const bus_mod = @import("bus.zig");
 
 const signal = @import("channels/signal.zig");
@@ -1233,7 +1231,7 @@ test "channel runtime wires security policy into session manager and shell tool"
         },
     };
 
-    var runtime = try ChannelRuntime.init(allocator, &cfg);
+    var runtime = try ChannelRuntime.init(allocator, &cfg, null);
     defer runtime.deinit();
 
     try std.testing.expect(runtime.session_mgr.policy != null);
