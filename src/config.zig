@@ -2654,6 +2654,32 @@ test "json parse model route metadata falls back to defaults on unknown values" 
     allocator.free(cfg.model_routes);
 }
 
+fn parseModelRoutesForAllocationTest(allocator: std.mem.Allocator, json: []const u8) !void {
+    var cfg = Config{
+        .workspace_dir = "/tmp/yc",
+        .config_path = "/tmp/yc/config.json",
+        .allocator = allocator,
+    };
+    try cfg.parseJson(json);
+    for (cfg.model_routes) |route| {
+        allocator.free(route.hint);
+        allocator.free(route.provider);
+        allocator.free(route.model);
+        if (route.api_key) |api_key| allocator.free(api_key);
+    }
+    allocator.free(cfg.model_routes);
+}
+
+test "json parse model routes frees partial allocations on out-of-memory" {
+    const json =
+        \\{"model_routes": [
+        \\  {"hint": "reasoning", "provider": "openrouter", "model": "anthropic/claude-opus-4", "cost_class": "premium", "quota_class": "constrained"},
+        \\  {"hint": "fast", "provider": "groq", "model": "llama-3.3-70b", "api_key": "gsk_test", "cost_class": "free", "quota_class": "unlimited"}
+        \\]}
+    ;
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, parseModelRoutesForAllocationTest, .{json});
+}
+
 test "json parse agents" {
     const allocator = std.testing.allocator;
     const json =

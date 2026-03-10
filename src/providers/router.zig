@@ -50,6 +50,7 @@ pub const RouterProvider = struct {
     ) !RouterProvider {
         // Build name -> index lookup
         var name_to_index = std.StringHashMap(usize).init(allocator);
+        errdefer name_to_index.deinit();
         for (provider_names, 0..) |name, i| {
             const entry = try name_to_index.getOrPut(name);
             if (!entry.found_existing) entry.value_ptr.* = i;
@@ -397,9 +398,32 @@ const MockProvider = struct {
     fn mockDeinit(_: *anyopaque) void {}
 };
 
+fn initRouterForAllocationTest(allocator: std.mem.Allocator) !void {
+    const provider_names = [_][]const u8{ "openrouter", "groq" };
+    var mock_default = MockProvider.init("default", false);
+    var mock_groq = MockProvider.init("groq", false);
+    const providers = [_]Provider{ mock_default.provider(), mock_groq.provider() };
+    const routes = [_]RouterProvider.RouteEntry{
+        .{ .hint = "fast", .route = .{ .provider_name = "groq", .model = "llama-3.3-70b" } },
+    };
+
+    var router = try RouterProvider.init(
+        allocator,
+        &provider_names,
+        &providers,
+        &routes,
+        "openrouter/anthropic/claude-sonnet-4",
+    );
+    defer router.deinit();
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // Tests
 // ════════════════════════════════════════════════════════════════════════════
+
+test "RouterProvider init frees partial allocations on out-of-memory" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, initRouterForAllocationTest, .{});
+}
 
 test "resolve preserves model for non-hints" {
     const provider_names = [_][]const u8{"default"};
