@@ -84,24 +84,24 @@ Notes:
 - If `zig build` fails immediately, verify the Zig version first.
 - This uses the native target of the current Termux environment, so you usually do **not** need `-Dtarget`.
 - On Android / Termux, prefer foreground use first (`agent`, `gateway`) before trying to manage it as a background service.
-- If you want a packaged Android / Termux binary in releases, track the open request in `nullclaw/nullclaw#396`.
+- Official releases publish pre-built Android / Termux binaries for `aarch64`, `armv7`, and `x86_64`.
 
 ### Cross-compiling for Android
 
 If you are building on another machine for a Termux / Android device, pass an explicit Zig target:
 
 ```bash
-zig build -Dtarget=aarch64-linux-android -Doptimize=ReleaseSmall
+zig build -Dtarget=aarch64-linux-android.24 -Doptimize=ReleaseSmall
 ```
 
 Common Android targets:
 
-- `aarch64-linux-android`
-- `arm-linux-androideabi`
-- `x86_64-linux-android`
+- `aarch64-linux-android.24`
+- `arm-linux-androideabi.24` with `-Dcpu=baseline+v7a`
+- `x86_64-linux-android.24`
 
 Use the target that matches the phone or emulator architecture.
-- If you want a packaged Android / Termux binary in releases, track the open request in `nullclaw/nullclaw#396`.
+Official releases also attach matching Android / Termux binaries built for Android API 24.
 
 ## Add Binary to PATH
 
