@@ -6,7 +6,7 @@
 //!   - Body size limits (64KB max)
 //!   - Request timeouts (30s)
 //!   - Bearer token authentication (PairingGuard)
-//!   - Endpoints: /health, /ready, /pair, /webhook, /a2a, /.well-known/agent-card.json, /whatsapp, /telegram, /line, /lark, /qq, /slack/events
+//!   - Endpoints: /health, /ready, /pair, /webhook, /a2a, /.well-known/agent-card.json, /whatsapp, /telegram, /line, /lark, /qq, /max, /slack/events
 //!
 //! Uses std.http.Server (built-in, no external deps).
 
@@ -911,6 +911,67 @@ fn selectTelegramConfig(
     return &cfg.channels.telegram[0];
 }
 
+fn findMaxConfigByAccountId(cfg: *const Config, account_id: []const u8) ?*const config_types.MaxConfig {
+    for (cfg.channels.max) |*max_cfg| {
+        if (std.ascii.eqlIgnoreCase(max_cfg.account_id, account_id)) return max_cfg;
+    }
+    return null;
+}
+
+fn findMaxConfigByWebhookSecret(cfg: *const Config, secret: []const u8) ?*const config_types.MaxConfig {
+    for (cfg.channels.max) |*max_cfg| {
+        if (max_cfg.webhook_secret) |configured_secret| {
+            if (configured_secret.len > 0 and std.mem.eql(u8, configured_secret, secret)) return max_cfg;
+        }
+    }
+    return null;
+}
+
+fn countMaxWebhookAccounts(cfg: *const Config) usize {
+    var count: usize = 0;
+    for (cfg.channels.max) |max_cfg| {
+        if (max_cfg.mode == .webhook) count += 1;
+    }
+    return count;
+}
+
+fn selectMaxConfig(
+    cfg_opt: ?*const Config,
+    target: []const u8,
+    secret_header: ?[]const u8,
+) ?*const config_types.MaxConfig {
+    if (!build_options.enable_channel_max) return null;
+    const cfg = cfg_opt orelse return null;
+    if (cfg.channels.max.len == 0) return null;
+
+    if (parseQueryParam(target, "account_id")) |account_id| {
+        return findMaxConfigByAccountId(cfg, account_id);
+    }
+    if (parseQueryParam(target, "account")) |account_id| {
+        return findMaxConfigByAccountId(cfg, account_id);
+    }
+
+    if (secret_header) |raw_secret| {
+        const secret = std.mem.trim(u8, raw_secret, " \t\r\n");
+        if (secret.len > 0) {
+            return findMaxConfigByWebhookSecret(cfg, secret);
+        }
+    }
+
+    const webhook_count = countMaxWebhookAccounts(cfg);
+    if (webhook_count == 1) {
+        for (cfg.channels.max) |*max_cfg| {
+            if (max_cfg.mode == .webhook) return max_cfg;
+        }
+    }
+
+    if (cfg.channels.max.len == 1) {
+        return &cfg.channels.max[0];
+    }
+
+    return null;
+}
+
 fn hasLineSecrets(cfg: *const Config) bool {
     if (!build_options.enable_channel_line) return false;
     for (cfg.channels.line) |line_cfg| {
@@ -1558,6 +1619,34 @@ fn larkSessionKeyRouted(
     );
 }
 
+fn maxSessionKey(buf: []u8, account_id: []const u8, sender: []const u8, reply_target: []const u8, is_group: bool) []const u8 {
+    if (is_group) {
+        return std.fmt.bufPrint(buf, "max:{s}:chat:{s}", .{ account_id, reply_target }) catch "max:default";
+    }
+    return std.fmt.bufPrint(buf, "max:{s}:{s}", .{ account_id, sender }) catch "max:default";
+}
+
+fn maxSessionKeyRouted(
+    allocator: std.mem.Allocator,
+    fallback_buf: []u8,
+    sender: []const u8,
+    reply_target: []const u8,
+    is_group: bool,
+    cfg_opt: ?*const Config,
+    account_id: []const u8,
+) []const u8 {
+    const fallback = maxSessionKey(fallback_buf, account_id, sender, reply_target, is_group);
+    const peer_id = if (is_group) reply_target else sender;
+    return resolveRouteSessionKey(
+        allocator,
+        cfg_opt,
+        "max",
+        account_id,
+        .{ .kind = if (is_group) .group else .direct, .id = peer_id },
+        fallback,
+    );
+}
+
 // ── Message Processing ──────────────────────────────────────────
 
 /// Extract the HTTP request body from raw bytes.
@@ -1791,6 +1880,7 @@ const webhook_route_descriptors = [_]WebhookRouteDescriptor{
     .{ .path = "/line", .handler = handleLineWebhookRoute },
     .{ .path = "/lark", .handler = handleLarkWebhookRoute },
     .{ .path = "/qq", .handler = handleQqWebhookRoute },
+    .{ .path = "/max", .handler = handleMaxWebhookRoute },
 };
 
 fn findWebhookRouteDescriptor(path: []const u8) ?*const WebhookRouteDescriptor {
@@ -2642,6 +2732,115 @@ fn handleQqWebhookRoute(ctx: *WebhookHandlerContext) void {
     ctx.response_body = "{\"status\":\"ok\"}";
 }
 
+fn handleMaxWebhookRoute(ctx: *WebhookHandlerContext) void {
+    if (!build_options.enable_channel_max) {
+        ctx.response_status = "404 Not Found";
+        ctx.response_body = "{\"error\":\"max channel disabled in this build\"}";
+        return;
+    }
+
+    if (!std.mem.eql(u8, ctx.method, "POST")) {
+        ctx.response_status = "405 Method Not Allowed";
+        ctx.response_body = "{\"error\":\"method not allowed\"}";
+        return;
+    }
+    if (!ctx.state.rate_limiter.allowWebhook(ctx.state.allocator, "max")) {
+        ctx.response_status = "429 Too Many Requests";
+        ctx.response_body = "{\"error\":\"rate limited\"}";
+        return;
+    }
+
+    const body = extractBody(ctx.raw_request) orelse {
+        ctx.response_body = "{\"status\":\"received\"}";
+        return;
+    };
+
+    const secret_header = extractHeader(ctx.raw_request, "X-Max-Bot-Api-Secret");
+    const max_cfg = selectMaxConfig(ctx.config_opt, ctx.target, secret_header) orelse {
+        ctx.response_status = "404 Not Found";
+        ctx.response_body = "{\"error\":\"max not configured\"}";
+        return;
+    };
+
+    if (max_cfg.mode != .webhook) {
+        ctx.response_status = "404 Not Found";
+        ctx.response_body = "{\"error\":\"max webhook mode not enabled\"}";
+        return;
+    }
+
+    // Verify secret header if secret is configured
+    if (max_cfg.webhook_secret) |secret| {
+        if (secret.len > 0) {
+            if (secret_header) |sig| {
+                if (!std.mem.eql(u8, std.mem.trim(u8, sig, " \t\r\n"), secret)) {
+                    ctx.response_status = "403 Forbidden";
+                    ctx.response_body = "{\"error\":\"invalid secret\"}";
+                    return;
+                }
+            } else {
+                ctx.response_status = "403 Forbidden";
+                ctx.response_body = "{\"error\":\"missing secret\"}";
+                return;
+            }
+        }
+    }
+
+    // Parse the update JSON
+    const parsed = std.json.parseFromSlice(std.json.Value, ctx.req_allocator, body, .{}) catch {
+        ctx.response_status = "400 Bad Request";
+        ctx.response_body = "{\"error\":\"invalid json payload\"}";
+        return;
+    };
+    defer parsed.deinit();
+
+    var max_ch = channels.max.MaxChannel.initFromConfig(ctx.req_allocator, max_cfg.*);
+
+    if (max_ch.processUpdate(ctx.req_allocator, parsed.value)) |inbound| {
+        defer inbound.deinit(ctx.req_allocator);
+
+        const reply_target = inbound.reply_target orelse inbound.sender;
+        const peer_id = if (inbound.is_group) reply_target else inbound.sender;
+        var kb: [192]u8 = undefined;
+        const sk = maxSessionKeyRouted(
+            ctx.req_allocator,
+            &kb,
+            inbound.sender,
+            reply_target,
+            inbound.is_group,
+            ctx.config_opt,
+            max_cfg.account_id,
+        );
+        const peer_kind: []const u8 = if (inbound.is_group) "group" else "direct";
+
+        if (ctx.state.event_bus) |eb| {
+            var meta_buf: [384]u8 = undefined;
+            const meta = std.fmt.bufPrint(&meta_buf, "{{\"account_id\":\"{s}\",\"peer_kind\":\"{s}\",\"peer_id\":\"{s}\"}}", .{
+                max_cfg.account_id,
+                peer_kind,
+                peer_id,
+            }) catch null;
+            _ = publishToBus(eb, ctx.state.allocator, "max", inbound.sender, reply_target, inbound.content, sk, meta);
+            ctx.response_body = "{\"status\":\"received\"}";
+            return;
+        }
+
+        if (ctx.session_mgr_opt) |sm| {
+            channels.max.setInteractiveOwnerContext(inbound.sender);
+            defer channels.max.setInteractiveOwnerContext(null);
+            const reply: ?[]const u8 = sm.processMessage(sk, inbound.content, null) catch |err| blk: {
+                max_ch.sendMessage(reply_target, userFacingAgentError(err)) catch {};
+                break :blk null;
+            };
+            if (reply) |r| {
+                defer ctx.root_allocator.free(r);
+                max_ch.sendMessage(reply_target, r) catch {};
+            }
+        }
+    }
+
+    ctx.response_body = "{\"status\":\"ok\"}";
+}
+
 fn applyRuntimeProviderOverrides(config: *const Config) !void {
     try http_util.setProxyOverride(config.http_request.proxy);
     try providers.setApiErrorLimitOverride(config.diagnostics.api_error_max_chars);
@@ -2692,7 +2891,7 @@ fn spawnA2aStreamingWorker(
 }
 
 /// Run the HTTP gateway. Binds to host:port and serves HTTP requests.
-/// Endpoints: GET /health, GET /ready, POST /pair, POST /webhook, GET|POST /whatsapp, POST /telegram, POST /slack/events, POST /line, POST /lark, POST /qq
+/// Endpoints: GET /health, GET /ready, POST /pair, POST /webhook, GET|POST /whatsapp, POST /telegram, POST /slack/events, POST /line, POST /lark, POST /qq, POST /max
 /// If config_ptr is null, loads config internally (for backward compatibility).
 pub fn run(allocator: std.mem.Allocator, host: []const u8, port: u16, config_ptr: ?*const Config, event_bus: ?*bus_mod.Bus) !void {
     health.markComponentOk("gateway");
@@ -3248,6 +3447,7 @@ test "findWebhookRouteDescriptor resolves known webhook paths" {
     try std.testing.expect(findWebhookRouteDescriptor("/line") != null);
     try std.testing.expect(findWebhookRouteDescriptor("/lark") != null);
     try std.testing.expect(findWebhookRouteDescriptor("/qq") != null);
+    try std.testing.expect(findWebhookRouteDescriptor("/max") != null);
     try std.testing.expect(findWebhookRouteDescriptor("/health") == null);
 }
 
@@ -3654,6 +3854,161 @@ test "selectTelegramConfig falls back to preferred primary account" {
     }
     try std.testing.expect(selected != null);
     try std.testing.expectEqualStrings("default", selected.?.account_id);
+}
+
+test "selectMaxConfig picks account by secret header" {
+    const max_accounts = [_]config_types.MaxConfig{
+        .{
+            .account_id = "main",
+            .bot_token = "max-main",
+            .mode = .webhook,
+            .webhook_secret = "secret-a",
+        },
+        .{
+            .account_id = "backup",
+            .bot_token = "max-backup",
+            .mode = .webhook,
+            .webhook_secret = "secret-b",
+        },
+    };
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = std.testing.allocator,
+        .channels = .{
+            .max = &max_accounts,
+        },
+    };
+
+    const selected = selectMaxConfig(&cfg, "/max", "secret-b");
+    if (!build_options.enable_channel_max) {
+        try std.testing.expect(selected == null);
+        return;
+    }
+    try std.testing.expect(selected != null);
+    try std.testing.expectEqualStrings("backup", selected.?.account_id);
+}
+
+test "selectMaxConfig picks account by query account_id" {
+    const max_accounts = [_]config_types.MaxConfig{
+        .{
+            .account_id = "main",
+            .bot_token = "max-main",
+        },
+        .{
+            .account_id = "backup",
+            .bot_token = "max-backup",
+        },
+    };
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = std.testing.allocator,
+        .channels = .{
+            .max = &max_accounts,
+        },
+    };
+
+    const selected = selectMaxConfig(&cfg, "/max?account_id=backup", null);
+    if (!build_options.enable_channel_max) {
+        try std.testing.expect(selected == null);
+        return;
+    }
+    try std.testing.expect(selected != null);
+    try std.testing.expectEqualStrings("backup", selected.?.account_id);
+}
+
+test "selectMaxConfig does not fall back when secret header is invalid" {
+    const max_accounts = [_]config_types.MaxConfig{
+        .{
+            .account_id = "main",
+            .bot_token = "max-main",
+            .mode = .webhook,
+            .webhook_secret = "secret-a",
+        },
+        .{
+            .account_id = "backup",
+            .bot_token = "max-backup",
+            .mode = .webhook,
+            .webhook_secret = "secret-b",
+        },
+    };
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = std.testing.allocator,
+        .channels = .{
+            .max = &max_accounts,
+        },
+    };
+
+    const selected = selectMaxConfig(&cfg, "/max", "wrong-secret");
+    if (!build_options.enable_channel_max) {
+        try std.testing.expect(selected == null);
+        return;
+    }
+    try std.testing.expect(selected == null);
+}
+
+test "selectMaxConfig requires explicit routing when multiple webhook accounts exist" {
+    const max_accounts = [_]config_types.MaxConfig{
+        .{
+            .account_id = "main",
+            .bot_token = "max-main",
+            .mode = .webhook,
+        },
+        .{
+            .account_id = "backup",
+            .bot_token = "max-backup",
+            .mode = .webhook,
+        },
+    };
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = std.testing.allocator,
+        .channels = .{
+            .max = &max_accounts,
+        },
+    };
+
+    const selected = selectMaxConfig(&cfg, "/max", null);
+    if (!build_options.enable_channel_max) {
+        try std.testing.expect(selected == null);
+        return;
+    }
+    try std.testing.expect(selected == null);
+}
+
+test "selectMaxConfig picks sole webhook account even when polling account exists" {
+    const max_accounts = [_]config_types.MaxConfig{
+        .{
+            .account_id = "poller",
+            .bot_token = "max-poll",
+            .mode = .polling,
+        },
+        .{
+            .account_id = "webhook",
+            .bot_token = "max-webhook",
+            .mode = .webhook,
+        },
+    };
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = std.testing.allocator,
+        .channels = .{
+            .max = &max_accounts,
+        },
+    };
+
+    const selected = selectMaxConfig(&cfg, "/max", null);
+    if (!build_options.enable_channel_max) {
+        try std.testing.expect(selected == null);
+        return;
+    }
+    try std.testing.expect(selected != null);
+    try std.testing.expectEqualStrings("webhook", selected.?.account_id);
 }
 
 test "selectWhatsAppConfig picks account by verify_token" {
@@ -4337,6 +4692,58 @@ test "larkSessionKeyRouted uses route engine when config exists" {
 
     const key = larkSessionKeyRouted(allocator, &key_buf, msg, &cfg, "lark-main");
     try std.testing.expectEqualStrings("agent:lark-group-agent:lark:group:ou_abc123", key);
+}
+
+test "maxSessionKeyRouted uses sender identity for direct chats" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var key_buf: [128]u8 = undefined;
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = allocator,
+        .agent_bindings = &[_]agent_routing.AgentBinding{
+            .{
+                .agent_id = "max-direct-agent",
+                .match = .{
+                    .channel = "max",
+                    .account_id = "max-main",
+                    .peer = .{ .kind = .direct, .id = "alice" },
+                },
+            },
+        },
+    };
+
+    const key = maxSessionKeyRouted(allocator, &key_buf, "alice", "dialog-123", false, &cfg, "max-main");
+    try std.testing.expectEqualStrings("agent:max-direct-agent:max:direct:alice", key);
+}
+
+test "maxSessionKeyRouted uses chat target for group chats" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var key_buf: [128]u8 = undefined;
+    var cfg = Config{
+        .workspace_dir = "/tmp",
+        .config_path = "/tmp/config.json",
+        .allocator = allocator,
+        .agent_bindings = &[_]agent_routing.AgentBinding{
+            .{
+                .agent_id = "max-group-agent",
+                .match = .{
+                    .channel = "max",
+                    .account_id = "max-main",
+                    .peer = .{ .kind = .group, .id = "chat-777" },
+                },
+            },
+        },
+    };
+
+    const key = maxSessionKeyRouted(allocator, &key_buf, "alice", "chat-777", true, &cfg, "max-main");
+    try std.testing.expectEqualStrings("agent:max-group-agent:max:group:chat-777", key);
 }
 
 // ── extractBody tests ────────────────────────────────────────────

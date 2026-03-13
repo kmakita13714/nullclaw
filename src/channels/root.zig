@@ -186,6 +186,22 @@ else
             pub fn setBus(_: *@This(), _: anytype) void {}
         };
     };
+pub const max = if (@import("build_options").enable_channel_max)
+    @import("max.zig")
+else
+    struct {
+        pub const MaxChannel = struct {
+            pub fn initFromConfig(_: @import("std").mem.Allocator, _: anytype) @This() {
+                return .{};
+            }
+            pub fn channel(_: *@This()) Channel {
+                unreachable;
+            }
+            pub fn setBus(_: *@This(), _: anytype) void {}
+        };
+
+        pub fn setInteractiveOwnerContext(_: ?[]const u8) void {}
+    };
 pub const dispatch = @import("dispatch.zig");
 
 // ════════════════════════════════════════════════════════════════════════════

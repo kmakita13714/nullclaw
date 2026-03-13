@@ -93,6 +93,7 @@ pub const ChannelManager = struct {
             .telegram => |ls| ls.last_activity.load(.acquire),
             .signal => |ls| ls.last_activity.load(.acquire),
             .matrix => |ls| ls.last_activity.load(.acquire),
+            .max => |ls| ls.last_activity.load(.acquire),
         };
     }
 
@@ -101,6 +102,7 @@ pub const ChannelManager = struct {
             .telegram => |ls| ls.stop_requested.store(true, .release),
             .signal => |ls| ls.stop_requested.store(true, .release),
             .matrix => |ls| ls.stop_requested.store(true, .release),
+            .max => |ls| ls.stop_requested.store(true, .release),
         }
     }
 
@@ -109,6 +111,7 @@ pub const ChannelManager = struct {
             .telegram => |ls| self.allocator.destroy(ls),
             .signal => |ls| self.allocator.destroy(ls),
             .matrix => |ls| self.allocator.destroy(ls),
+            .max => |ls| self.allocator.destroy(ls),
         }
     }
 
@@ -212,6 +215,9 @@ pub const ChannelManager = struct {
         var listener_type = comptime listenerTypeForField(field_name);
         if (comptime std.mem.eql(u8, field_name, "qq") or std.mem.eql(u8, field_name, "lark")) {
             listener_type = if (cfg.receive_mode == .webhook) .webhook_only else .gateway_loop;
+        }
+        if (comptime std.mem.eql(u8, field_name, "max")) {
+            listener_type = if (cfg.mode == .webhook) .webhook_only else .polling;
         }
         try self.entries.append(self.allocator, .{
             .name = field_name,
@@ -472,11 +478,13 @@ pub const ChannelManager = struct {
 // Tests
 // ════════════════════════════════════════════════════════════════════════════
 
-test "PollingState has telegram signal and matrix variants" {
+test "PollingState has telegram signal matrix and max variants" {
     try std.testing.expect(@intFromEnum(@as(std.meta.Tag(PollingState), .telegram)) !=
         @intFromEnum(@as(std.meta.Tag(PollingState), .signal)));
     try std.testing.expect(@intFromEnum(@as(std.meta.Tag(PollingState), .signal)) !=
         @intFromEnum(@as(std.meta.Tag(PollingState), .matrix)));
+    try std.testing.expect(@intFromEnum(@as(std.meta.Tag(PollingState), .matrix)) !=
+        @intFromEnum(@as(std.meta.Tag(PollingState), .max)));
 }
 
 test "ListenerType enum values distinct" {
@@ -782,6 +790,19 @@ test "ChannelManager collectConfiguredChannels wires listener types accounts and
     const maixcam_accounts = [_]@import("config_types.zig").MaixCamConfig{
         .{ .account_id = "cam-main", .name = "maixcam-main" },
     };
+    const max_accounts = [_]@import("config_types.zig").MaxConfig{
+        .{
+            .account_id = "max-poll",
+            .bot_token = "max-token-poll",
+            .mode = .polling,
+        },
+        .{
+            .account_id = "max-webhook",
+            .bot_token = "max-token-hook",
+            .mode = .webhook,
+            .webhook_url = "https://example.com/max",
+        },
+    };
 
     const config = Config{
         .workspace_dir = "/tmp",
@@ -796,6 +817,7 @@ test "ChannelManager collectConfiguredChannels wires listener types accounts and
             .mattermost = &mattermost_accounts,
             .slack = &slack_accounts,
             .maixcam = &maixcam_accounts,
+            .max = &max_accounts,
             .whatsapp = &[_]@import("config_types.zig").WhatsAppConfig{
                 .{
                     .account_id = "wa-main",
@@ -907,6 +929,16 @@ test "ChannelManager collectConfiguredChannels wires listener types accounts and
         expected_total += maixcam_accounts.len;
         expected_send_only += maixcam_accounts.len;
     }
+    if (channel_catalog.isBuildEnabled(.max)) {
+        expected_total += max_accounts.len;
+        for (max_accounts) |max_cfg| {
+            if (max_cfg.mode == .webhook) {
+                expected_webhook_only += 1;
+            } else {
+                expected_polling += 1;
+            }
+        }
+    }
     if (channel_catalog.isBuildEnabled(.whatsapp)) {
         expected_total += config.channels.whatsapp.len;
         expected_webhook_only += config.channels.whatsapp.len;
@@ -965,6 +997,8 @@ test "ChannelManager collectConfiguredChannels wires listener types accounts and
     try expectEntryPresence(entries, "mattermost", "mm-main", channel_catalog.isBuildEnabled(.mattermost));
     try expectEntryPresence(entries, "slack", "sl-main", channel_catalog.isBuildEnabled(.slack));
     try expectEntryPresence(entries, "maixcam", "cam-main", channel_catalog.isBuildEnabled(.maixcam));
+    try expectEntryPresence(entries, "max", "max-poll", channel_catalog.isBuildEnabled(.max));
+    try expectEntryPresence(entries, "max", "max-webhook", channel_catalog.isBuildEnabled(.max));
     try expectEntryPresence(entries, "whatsapp", "wa-main", channel_catalog.isBuildEnabled(.whatsapp));
     try expectEntryPresence(entries, "line", "line-main", channel_catalog.isBuildEnabled(.line));
     try expectEntryPresence(entries, "lark", "lark-main", channel_catalog.isBuildEnabled(.lark));

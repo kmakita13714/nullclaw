@@ -92,6 +92,7 @@ const ChannelSelection = struct {
     enable_channel_signal: bool = false,
     enable_channel_nostr: bool = false,
     enable_channel_web: bool = false,
+    enable_channel_max: bool = false,
 
     fn enableAll(self: *ChannelSelection) void {
         self.enable_channel_cli = true;
@@ -113,6 +114,7 @@ const ChannelSelection = struct {
         self.enable_channel_signal = true;
         self.enable_channel_nostr = true;
         self.enable_channel_web = true;
+        self.enable_channel_max = true;
     }
 };
 
@@ -184,6 +186,8 @@ fn parseChannelsOption(raw: []const u8) !ChannelSelection {
             selection.enable_channel_nostr = true;
         } else if (std.mem.eql(u8, token, "web")) {
             selection.enable_channel_web = true;
+        } else if (std.mem.eql(u8, token, "max")) {
+            selection.enable_channel_max = true;
         } else {
             std.log.err("unknown channel '{s}' in -Dchannels list", .{token});
             return error.InvalidChannelsOption;
@@ -358,7 +362,7 @@ pub fn build(b: *std.Build) void {
     const channels_raw = b.option(
         []const u8,
         "channels",
-        "Channels list. Tokens: all|none|cli|telegram|discord|slack|whatsapp|matrix|mattermost|irc|imessage|email|lark|dingtalk|line|onebot|qq|maixcam|signal|nostr|web (default: all)",
+        "Channels list. Tokens: all|none|cli|telegram|discord|slack|whatsapp|matrix|mattermost|irc|imessage|email|lark|dingtalk|line|onebot|qq|maixcam|signal|nostr|web|max (default: all)",
     );
     const channels = if (channels_raw) |raw| blk: {
         const parsed = parseChannelsOption(raw) catch {
@@ -409,6 +413,7 @@ pub fn build(b: *std.Build) void {
     const enable_channel_signal = channels.enable_channel_signal;
     const enable_channel_nostr = channels.enable_channel_nostr;
     const enable_channel_web = channels.enable_channel_web;
+    const enable_channel_max = channels.enable_channel_max;
 
     if (target.result.abi == .android) {
         ensureAndroidBuildEnvironment(b);
@@ -467,6 +472,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "enable_channel_signal", enable_channel_signal);
     build_options.addOption(bool, "enable_channel_nostr", enable_channel_nostr);
     build_options.addOption(bool, "enable_channel_web", enable_channel_web);
+    build_options.addOption(bool, "enable_channel_max", enable_channel_max);
     const build_options_module = build_options.createModule();
 
     // ---------- library module (importable by consumers) ----------

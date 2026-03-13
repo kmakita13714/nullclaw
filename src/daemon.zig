@@ -12,6 +12,7 @@ const Config = @import("config.zig").Config;
 const CronScheduler = @import("cron.zig").CronScheduler;
 const cron = @import("cron.zig");
 const bus_mod = @import("bus.zig");
+const channels_mod = @import("channels/root.zig");
 const dispatch = @import("channels/dispatch.zig");
 const channel_loop = @import("channel_loop.zig");
 const channel_manager = @import("channel_manager.zig");
@@ -804,6 +805,11 @@ fn inboundDispatcherThread(
                 .ctx = @ptrCast(&streaming_ctx),
             };
             stream_sink = makeStreamingSinkForChannel(msg.channel, raw_sink, &outbound_tag_filter);
+        }
+
+        if (std.mem.eql(u8, msg.channel, "max")) {
+            channels_mod.max.setInteractiveOwnerContext(msg.sender_id);
+            defer channels_mod.max.setInteractiveOwnerContext(null);
         }
 
         // Build conversation context for channels that provide sender metadata.
