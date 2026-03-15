@@ -666,6 +666,25 @@ test "convertToolsAnthropic empty tools" {
     try std.testing.expectEqualStrings("[]", buf.items);
 }
 
+test "providerUrl returns correct URLs" {
+    try std.testing.expectEqualStrings(
+        "https://api.anthropic.com/v1/messages",
+        providerUrl("anthropic"),
+    );
+    try std.testing.expectEqualStrings(
+        "https://api.openai.com/v1/chat/completions",
+        providerUrl("openai"),
+    );
+    try std.testing.expectEqualStrings(
+        "https://openrouter.ai/api/v1/chat/completions",
+        providerUrl("openrouter"),
+    );
+    try std.testing.expectEqualStrings(
+        "http://localhost:11434/api/chat",
+        providerUrl("ollama"),
+    );
+}
+
 test "extractContent parses OpenAI format" {
     const allocator = std.testing.allocator;
     const body =
