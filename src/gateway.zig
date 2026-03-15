@@ -3939,10 +3939,6 @@ test "idempotency store allows different keys" {
     try std.testing.expect(!store.recordIfNew(std.testing.allocator, "a"));
 }
 
-test "gateway module compiles" {
-    // Compile-time check only
-}
-
 test "findWebhookRouteDescriptor resolves known webhook paths" {
     try std.testing.expect(findWebhookRouteDescriptor("/telegram") != null);
     try std.testing.expect(findWebhookRouteDescriptor("/whatsapp") != null);
