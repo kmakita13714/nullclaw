@@ -142,7 +142,7 @@ Notes:
 
 ### `agents.list`
 
-- Defines named agent profiles used by tools such as `/delegate`.
+- Defines named agent profiles used by the `delegate` tool, `/subagents spawn --agent`, and `bindings`.
 - Each entry may set `provider` + `model`, or a full `provider/model` ref in `model.primary`.
 - Example:
 
@@ -167,7 +167,7 @@ Use this pattern when you want one "orchestrator" agent to delegate specialized 
 1. Define reusable specialists under `agents.list`.
 2. Keep a general default under `agents.defaults`.
 3. Use `bindings` to route specific chats/topics to a specialist.
-4. Use `/delegate <agent-id> <task>` when you want explicit one-off delegation.
+4. Use `/subagents spawn --agent <agent-id> <task>` when you want explicit one-off delegation from the operator side.
 
 Example:
 
@@ -200,7 +200,7 @@ Example:
 
 Notes:
 
-- `agents.list[].id` is the value used by `/delegate` and by `bindings[].agent_id`.
+- `agents.list[].id` is the value used by `/subagents spawn --agent <name>`, the `delegate` tool's `agent` argument, and `bindings[].agent_id`.
 - Prefer short stable ids (`coder`, `researcher`) so chat commands stay simple.
 - Keep specialist prompts narrow; broad prompts overlap and reduce routing clarity.
 
@@ -223,7 +223,7 @@ You can also inline the same document directly in config:
 {
   "identity": {
     "format": "aieos",
-    "aieos_inline": "{\"version\":\"1.1\",\"agent\":{\"name\":\"nullclaw-assistant\",\"description\":\"General purpose assistant\"},\"user\":{\"name\":\"operator\",\"timezone\":\"UTC+08:00\"}}"
+    "aieos_inline": "{\"identity\":{\"names\":{\"first\":\"nullclaw-assistant\"},\"bio\":\"General-purpose autonomous assistant\"},\"linguistics\":{\"style\":\"concise\"},\"motivations\":{\"core_drive\":\"Help the operator finish tasks safely\"}}"
   }
 }
 ```
@@ -232,20 +232,24 @@ Minimal AIEOS v1.1 example file (`identity/aieos.identity.json`):
 
 ```json
 {
-  "version": "1.1",
-  "agent": {
-    "name": "nullclaw-assistant",
-    "description": "General-purpose autonomous assistant"
+  "identity": {
+    "names": {
+      "first": "nullclaw-assistant"
+    },
+    "bio": "General-purpose autonomous assistant"
   },
-  "user": {
-    "name": "operator",
-    "timezone": "UTC+08:00"
+  "linguistics": {
+    "style": "concise"
+  },
+  "motivations": {
+    "core_drive": "Help the operator finish tasks safely"
   }
 }
 ```
 
 Notes:
 
+- AIEOS payloads use top-level sections such as `identity`, `psychology`, `linguistics`, `motivations`, and `capabilities`.
 - Prefer `aieos_path` for maintainability and version control readability.
 - Use `aieos_inline` only when you need a fully self-contained single config file.
 - Keep `identity.format` aligned with the payload source (`aieos`).
