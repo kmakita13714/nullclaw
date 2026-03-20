@@ -49,12 +49,14 @@ nullclaw gateway
 | `nullclaw channel start telegram` | 启动指定渠道 |
 | `nullclaw migrate openclaw --dry-run` | 预演迁移 OpenClaw 数据 |
 | `nullclaw migrate openclaw` | 执行迁移 |
-| `nullclaw history list [--json]` | 列出会话记录 |
-| `nullclaw history show <session_id> [--json]` | 查看指定会话的消息详情 |
+| `nullclaw history list [--limit N] [--offset N] [--json]` | 列出会话记录 |
+| `nullclaw history show <session_id> [--limit N] [--offset N] [--json]` | 查看指定会话的消息详情 |
 
 ## 服务化运行建议
 
 建议在长期运行场景使用 service 子命令：
+
+- Linux 环境会优先使用 `systemd --user`，在 Alpine / OpenRC 系统上会自动切换为 OpenRC。
 
 ```bash
 nullclaw service install
@@ -118,6 +120,8 @@ nullclaw onboard --interactive
 - `channels.<name>.accounts.*` 的 token / webhook / account 字段是否正确。
 - `allow_from` 是否误设为空数组。
 - `nullclaw channel status` 是否有 unhealthy 标记。
+- 如果是 DingTalk，进一步看
+  [DingTalk 运维就绪](./ops/dingtalk-ops-readiness.md)。
 
 ### 4) 网关启动但外部不可访问
 
